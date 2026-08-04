@@ -390,13 +390,14 @@ function slotDateLabel(day){
   const di = DAYS.indexOf(day);
   return addDays(monday, di).toLocaleDateString('en-US',{month:'short',day:'numeric'});
 }
-async function confirmBooking(slotKey, venue, players){
+async function confirmBooking(slotKey, venue, players, code){
   const wk = currentWeekStart();
-  state.bookings = {...state.bookings, [slotKey]: {venue, players, bookedBy: state.myName}};
+  state.bookings = {...state.bookings, [slotKey]: {venue, players, bookedBy: state.myName, code: code||''}};
   state.bookModal = null;
   const {day, time} = parseSlot(slotKey);
   const dateLabel = slotDateLabel(day);
-  const text = `🎱 Match confirmed: ${players[0]} vs ${players[1]} — ${day} ${dateLabel}, ${time.label} (${time.sub}) at ${venue}. See you there!`;
+  const codeLine = code ? ` Entry code: ${code}.` : '';
+  const text = `🎱 Match confirmed: ${players[0]} vs ${players[1]} — ${day} ${dateLabel}, ${time.label} (${time.sub}) at ${venue}.${codeLine} See you there!`;
   state.notify = {kind:'confirmed', players, text};
   render();
   await sset('bookings:'+wk, state.bookings, true);
@@ -539,10 +540,11 @@ function renderSchedule(){
             ${people.map(p=>Ball(p)).join('') || '<span style="color:var(--ink-soft);font-size:12px;">—</span>'}
           </div>
           ${booking
-            ? `<span style="display:flex;gap:6px;align-items:center;">
+            ? `<span style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
                 ${booking.venue===DEFAULT_VENUE
                   ? `<a class="booked-badge" href="${DEFAULT_VENUE_URL}" target="_blank" rel="noopener" style="text-decoration:none;">✓ ${esc(booking.venue)} ↗</a>`
                   : `<span class="booked-badge">✓ ${esc(booking.venue)}</span>`}
+                ${booking.code ? `<span class="booked-badge" style="background:transparent;border:1px solid var(--gold);color:var(--gold-bright);">🔑 ${esc(booking.code)}</span>` : ''}
                 <button class="cancel-btn" data-cancel="${slotKey}">${state.cancelConfirm===slotKey?'Tap to confirm':'Cancel'}</button>
               </span>`
             : (isMatch ? `<button class="book-btn" data-book="${slotKey}">Book</button>` : '')
@@ -607,6 +609,12 @@ function renderBookModal(){
           <input type="text" id="venue-input" value="${venueMode==='default'?esc(DEFAULT_VENUE):esc(state.customVenue||'')}" ${venueMode==='default'?'readonly':''} placeholder="${venueMode==='other'?'Type venue name…':''}">
           ${venueMode==='default' ? `<a href="${DEFAULT_VENUE_URL}" target="_blank" rel="noopener" style="display:inline-block;margin-top:6px;font-size:12.5px;color:var(--gold-bright);font-family:'IBM Plex Mono',monospace;">Book a table at ${esc(DEFAULT_VENUE)} ↗</a>` : ''}
         </div>
+        ${venueMode==='default' ? `
+        <div class="field">
+          <label>ENTRY CODE</label>
+          <input type="text" id="venue-code-input" value="${esc(state.venueCode||'')}" placeholder="e.g. 9245#" inputmode="text">
+          <div style="font-size:11.5px;color:var(--ink-soft);margin-top:5px;">The door code from the venue's booking confirmation — gets included in the WhatsApp message.</div>
+        </div>` : ''}
         <button class="btn gold" id="confirm-book" style="width:100%;">Confirm Booking</button>
         ${state.formError ? `<div style="color:#E8A79B;font-size:12.5px;margin-top:8px;text-align:center;font-family:'IBM Plex Mono',monospace;">${esc(state.formError)}</div>` : ''}
       </div>
@@ -698,7 +706,7 @@ function wireEvents(){
     b.onclick = async ()=>{ state.weekOffset += parseInt(b.dataset.nav,10); await loadWeek(); render(); };
   });
   document.querySelectorAll('[data-book]').forEach(b=>{
-    b.onclick = ()=>{ state.bookModal = b.dataset.book; state.venueMode = 'default'; state.formError = null; render(); };
+    b.onclick = ()=>{ state.bookModal = b.dataset.book; state.venueMode = 'default'; state.venueCode = null; state.formError = null; render(); };
   });
   document.querySelectorAll('[data-cancel]').forEach(b=>{
     b.onclick = ()=>{
@@ -716,7 +724,9 @@ function wireEvents(){
   document.querySelectorAll('[data-venue-mode]').forEach(b=>{
     b.onclick = ()=>{
       const input = document.getElementById('venue-input');
+      const codeInput = document.getElementById('venue-code-input');
       if(input && state.venueMode==='other') state.customVenue = input.value;
+      if(codeInput) state.venueCode = codeInput.value;
       state.venueMode = b.dataset.venueMode;
       render();
     };
@@ -773,21 +783,23 @@ function wireEvents(){
   if(openResultForm) openResultForm.onclick = ()=>{ state.resultForm = true; state.formError = null; render(); };
 
   document.querySelectorAll('[data-close-modal]').forEach(b=>{
-    b.onclick = ()=>{ state.bookModal=null; state.resultForm=false; state.venueMode=null; state.customVenue=null; state.formError=null; render(); };
+    b.onclick = ()=>{ state.bookModal=null; state.resultForm=false; state.venueMode=null; state.customVenue=null; state.venueCode=null; state.formError=null; render(); };
   });
   document.querySelectorAll('[data-close-notify]').forEach(b=>{
     b.onclick = ()=>{ state.notify=null; render(); };
   });
   const overlay = document.getElementById('overlay');
-  if(overlay) overlay.addEventListener('click', e=>{ if(e.target.id==='overlay'){ state.bookModal=null; state.resultForm=false; state.venueMode=null; state.customVenue=null; state.formError=null; state.notify=null; render(); }});
+  if(overlay) overlay.addEventListener('click', e=>{ if(e.target.id==='overlay'){ state.bookModal=null; state.resultForm=false; state.venueMode=null; state.customVenue=null; state.venueCode=null; state.formError=null; state.notify=null; render(); }});
 
   const confirmBook = document.getElementById('confirm-book');
   if(confirmBook) confirmBook.onclick = ()=>{
     const venue = document.getElementById('venue-input').value.trim() || 'TBD';
+    const codeInput = document.getElementById('venue-code-input');
+    const code = codeInput ? codeInput.value.trim() : '';
     const checked = [...document.querySelectorAll('.book-player:checked')].map(c=>c.value);
     if(checked.length<2){ state.formError = 'Pick two players.'; render(); return; }
-    state.venueMode = null; state.customVenue = null; state.formError = null;
-    confirmBooking(state.bookModal, venue, checked.slice(0,2));
+    state.venueMode = null; state.customVenue = null; state.venueCode = null; state.formError = null;
+    confirmBooking(state.bookModal, venue, checked.slice(0,2), code);
   };
 
   const confirmResult = document.getElementById('confirm-result');
