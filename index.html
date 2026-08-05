@@ -200,6 +200,7 @@ input[type=text]::placeholder, textarea::placeholder{color:var(--ink-soft);}
   background:var(--black-deep);color:var(--ink-soft);font-size:12.5px;cursor:pointer;font-family:'IBM Plex Mono',monospace;
 }
 .venue-chip.active{border-color:var(--gold);color:var(--gold-bright);background:#2A2410;}
+@keyframes spin{to{transform:rotate(360deg);}}
 </style>
 </head>
 <body>
@@ -355,8 +356,9 @@ async function loadRoster(){
 }
 async function loadWeek(){
   const wk = currentWeekStart();
-  state.avail = (await sget('avail:'+wk, true)) || {};
-  state.bookings = (await sget('bookings:'+wk, true)) || {};
+  const data = await sgetMulti(['avail:'+wk, 'bookings:'+wk]);
+  state.avail = data['avail:'+wk] || {};
+  state.bookings = data['bookings:'+wk] || {};
 }
 async function loadResults(){
   state.results = (await sget('results', true)) || [];
@@ -388,7 +390,7 @@ async function init(){
   // Keep the loading screen visible for at least ~600ms so it registers,
   // rather than flashing by unnoticed on a fast connection.
   const elapsed = Date.now() - started;
-  if(elapsed < 1500){ await wait(1500 - elapsed); }
+  if(elapsed < 500){ await wait(500 - elapsed); }
   state.loaded = true;
   render();
 }
@@ -566,7 +568,7 @@ function renderSchedule(){
   let html = `
     <div class="weeknav">
       <button data-nav="-1">‹</button>
-      <div class="wk">${state.weekOffset===0?'This Week':(state.weekOffset===1?'Next Week':humanRange(monday))}<small>${humanRange(monday)}</small></div>
+      <div class="wk">${state.weekOffset===0?'This Week':(state.weekOffset===1?'Next Week':humanRange(monday))}<small>${humanRange(monday)}</small>${state.weekLoading?' <span style="display:inline-block;width:10px;height:10px;border:2px solid var(--line);border-top-color:var(--gold);border-radius:50%;animation:spin 0.7s linear infinite;vertical-align:middle;margin-left:4px;"></span>':''}</div>
       <button data-nav="1">›</button>
     </div>
     ${state.navError ? `<div style="background:#3A1E1E;color:#E8A79B;font-family:'IBM Plex Mono',monospace;font-size:11.5px;padding:9px 14px;border-radius:8px;margin-bottom:14px;">Week nav error: ${esc(state.navError)}</div>` : ''}`;
@@ -754,11 +756,15 @@ function wireEvents(){
     b.onclick = async ()=>{
       try{
         state.weekOffset += parseInt(b.dataset.nav,10);
+        state.weekLoading = true;
+        render(); // instantly reflect the new week label + a small spinner
         await loadWeek();
+        state.weekLoading = false;
         state.navError = null;
         render();
       }catch(err){
         console.error('week nav failed', err);
+        state.weekLoading = false;
         state.navError = (err && err.message) ? err.message : String(err);
         render();
       }
