@@ -371,6 +371,8 @@ const DEFAULT_VENUE = 'The Billiard House';
 const DEFAULT_VENUE_URL = 'https://thebilliardhousemalta.com/booking/';
 
 async function init(){
+  render(); // show the loading screen immediately, before the fetch starts
+  const started = Date.now();
   loadMe();
   const wk = currentWeekStart();
   const data = await sgetMulti(['roster', 'results', 'avail:'+wk, 'bookings:'+wk]);
@@ -383,6 +385,10 @@ async function init(){
     state.roster = DEFAULT_ROSTER;
     await sset('roster', state.roster, true);
   }
+  // Keep the loading screen visible for at least ~600ms so it registers,
+  // rather than flashing by unnoticed on a fast connection.
+  const elapsed = Date.now() - started;
+  if(elapsed < 600){ await wait(600 - elapsed); }
   state.loaded = true;
   render();
 }
