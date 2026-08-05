@@ -305,6 +305,27 @@ async function sget(key, shared, attempt){
     return null;
   }
 }
+// Batched read — fetches several keys in a single round-trip (falls back to
+// individual sget() calls automatically if the backend doesn't support ?keys=).
+async function sgetMulti(keys, attempt){
+  attempt = attempt||0;
+  try{
+    const res = await fetch(`${APPS_SCRIPT_URL}?keys=${encodeURIComponent(keys.join(','))}`);
+    if(!res.ok) throw new Error('http '+res.status);
+    const data = await res.json();
+    if(!data || !data.values) throw new Error('no values in batched response');
+    state.syncIssue = false;
+    const out = {};
+    keys.forEach(k=>{ out[k] = data.values[k] ? JSON.parse(data.values[k]) : null; });
+    return out;
+  }catch(e){
+    if(attempt<1){ await wait(300); return sgetMulti(keys, attempt+1); }
+    console.warn('batched get unavailable, falling back to individual requests', e);
+    const out = {};
+    await Promise.all(keys.map(async k=>{ out[k] = await sget(k, true); }));
+    return out;
+  }
+}
 async function sset(key, val, shared, attempt){
   attempt = attempt||0;
   try{
@@ -350,12 +371,18 @@ const DEFAULT_VENUE = 'The Billiard House';
 const DEFAULT_VENUE_URL = 'https://thebilliardhousemalta.com/booking/';
 
 async function init(){
-  await Promise.all([loadRoster(), loadMe(), loadResults()]);
+  loadMe();
+  const wk = currentWeekStart();
+  const data = await sgetMulti(['roster', 'results', 'avail:'+wk, 'bookings:'+wk]);
+  const r = data['roster'] || [];
+  state.roster = r.map(item => typeof item === 'string' ? {name: item, phone:''} : item);
+  state.results = data['results'] || [];
+  state.avail = data['avail:'+wk] || {};
+  state.bookings = data['bookings:'+wk] || {};
   if(state.roster.length===0){
     state.roster = DEFAULT_ROSTER;
     await sset('roster', state.roster, true);
   }
-  await loadWeek();
   state.loaded = true;
   render();
 }
@@ -430,7 +457,20 @@ async function addResult(r){
 // ---------- Render ----------
 function render(){
   const el = document.getElementById('app');
-  if(!state.loaded){ el.innerHTML = `<div class="empty">Loading…</div>`; return; }
+  if(!state.loaded){
+    el.innerHTML = `
+      <div style="min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;background:var(--black);gap:18px;">
+        <div style="display:flex;align-items:center;gap:10px;">
+          <span class="dot" style="width:26px;height:26px;"></span>
+          <span style="font-family:'Oswald',sans-serif;font-weight:700;letter-spacing:.5px;color:var(--gold-bright);font-size:26px;text-transform:uppercase;">Table Talk</span>
+        </div>
+        <div style="width:34px;height:34px;border:3px solid var(--line);border-top-color:var(--gold);border-radius:50%;animation:spin 0.8s linear infinite;"></div>
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--ink-soft);letter-spacing:.3px;">Loading your team's schedule…</div>
+      </div>
+      <style>@keyframes spin{to{transform:rotate(360deg);}}</style>
+    `;
+    return;
+  }
 
   el.innerHTML = `
     <header class="rail">
@@ -862,9 +902,23 @@ function getSheet() {
   return sheet;
 }
 function doGet(e) {
-  const key = e.parameter.key;
   const sheet = getSheet();
   const data = sheet.getDataRange().getValues();
+  // Batched lookup: ?keys=a,b,c -> {values: {a: ..., b: ..., c: ...}}
+  if (e.parameter.keys) {
+    const keys = e.parameter.keys.split(',');
+    const values = {};
+    keys.forEach(k => { values[k] = null; });
+    for (let i = 0; i < data.length; i++) {
+      if (values.hasOwnProperty(data[i][0])) {
+        values[data[i][0]] = data[i][1];
+      }
+    }
+    return ContentService.createTextOutput(JSON.stringify({values: values}))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+  // Single lookup: ?key=a -> {key: 'a', value: ...}
+  const key = e.parameter.key;
   for (let i = 0; i < data.length; i++) {
     if (data[i][0] === key) {
       return ContentService.createTextOutput(JSON.stringify({key: key, value: data[i][1]}))
